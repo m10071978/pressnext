@@ -1348,25 +1348,41 @@ function installLocalKeyMonitor() {
 }
 
 // Native chooseFile/chooseFolder panels (song search, target-app picker,
-// batch-formatter file/folder pickers) run their own modal loop while the
-// global key monitor's callback can still fire for every keystroke on the
-// system, including presses that switch the keyboard input source. Re-entering
-// the JXA/AppleScript runtime from that global callback while the main thread
-// is already blocked inside a native modal panel has been observed to crash
-// PressNext Live on macOS Tahoe, most often when the input source is switched
-// while typing in the panel's search field. The local monitor stays installed
-// (it only sees keys aimed at this app's own windows, which already covers
-// the panel, and it is what still lets Cmd+Q work) - only the system-wide tap
-// is paused for the duration of the panel.
+// batch-formatter file/folder pickers, renaming pickers) run their own modal
+// loop. Both key monitors keep firing while that loop is running: the global
+// one sees every keystroke on the system, and the LOCAL one sees every
+// keystroke aimed at this app's own windows - which includes the panel
+// itself, since the panel belongs to PressNext Live. Re-entering the
+// JXA/AppleScript runtime from either callback while the main thread is
+// already blocked inside a native modal panel has been observed to crash
+// PressNext Live on macOS Tahoe: first when switching the keyboard input
+// source while typing in the panel's search field, and later on a plain
+// Cmd+A (select all) inside the panel.
+//
+// Earlier versions paused only the global monitor and deliberately left the
+// local one installed so that Cmd+Q would still work over the panel. That
+// turned out to be exactly the remaining crash path, so BOTH monitors are now
+// paused for the duration of the panel. The cost is small: while a panel is
+// open the assigned keys do nothing, and the panel is closed with its own
+// Cancel button or Esc, as any macOS dialog.
 function pauseGlobalKeyMonitorForFilePanel() {
-    if (globalKeyMonitor === null) return;
-    try { $.NSEvent.removeMonitor(globalKeyMonitor); } catch (ignored) {}
-    globalKeyMonitor = null;
+    if (globalKeyMonitor !== null) {
+        try { $.NSEvent.removeMonitor(globalKeyMonitor); } catch (ignored) {}
+        globalKeyMonitor = null;
+    }
+    if (localKeyMonitor !== null) {
+        try { $.NSEvent.removeMonitor(localKeyMonitor); } catch (ignored) {}
+        localKeyMonitor = null;
+    }
 }
 
 function resumeGlobalKeyMonitorAfterFilePanel() {
+    // Точно то же условие и тот же порядок, что и в штатной установке
+    // мониторов (installKeyboardMonitorsWhenAllowed), чтобы после панели
+    // приложение возвращалось ровно в то состояние, в котором было.
     if (!accessibilityIsAllowed()) return;
     installGlobalKeyMonitor();
+    installLocalKeyMonitor();
 }
 
 function recordKey(event) {
